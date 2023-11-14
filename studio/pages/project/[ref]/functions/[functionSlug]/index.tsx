@@ -7,13 +7,12 @@ import AreaChart from 'components/ui/Charts/AreaChart'
 import BarChart from 'components/ui/Charts/BarChart'
 import StackedBarChart from 'components/ui/Charts/StackedBarChart'
 import NoPermission from 'components/ui/NoPermission'
-import {
-  useFunctionsInvStatsQuery,
-  useFunctionsResourceQuery,
-} from 'data/analytics/functions-inv-stats-query'
+import { useFunctionsInvStatsQuery } from 'data/analytics/functions-inv-stats-query'
+import { useFunctionsReqStatsQuery } from 'data/analytics/functions-req-stats-query'
+import { useFunctionsResourceUsageQuery } from 'data/analytics/functions-resource-usage-query'
 import { useEdgeFunctionQuery } from 'data/edge-functions/edge-function-query'
 import dayjs, { Dayjs } from 'dayjs'
-import { useCheckPermissions } from 'hooks'
+import { useCheckPermissions, useFlag } from 'hooks'
 import useFillTimeseriesSorted from 'hooks/analytics/useFillTimeseriesSorted'
 import sumBy from 'lodash/sumBy'
 import { observer } from 'mobx-react-lite'
@@ -70,17 +69,40 @@ const PageLayout: NextPageWithLayout = () => {
     slug: functionSlug,
   })
   const id = selectedFunction?.id
+  const resourceUsageMetricsEnabled = useFlag('enableResourceUsageMetricsForEdgeFunctions')
 
-  const { data, error } = useFunctionsInvStatsQuery({
-    projectRef,
-    functionId: id,
-    interval: selectedInterval.key,
-  })
-  const { data: resourceUsageData, error: resourceUsageError } = useFunctionsResourceQuery({
-    projectRef,
-    functionId: id,
-    interval: selectedInterval.key,
-  })
+  const invStatsResult = useFunctionsInvStatsQuery(
+    {
+      projectRef,
+      functionId: id,
+      interval: selectedInterval.key,
+    },
+    { enabled: !resourceUsageMetricsEnabled }
+  )
+
+  const reqStatsResult = useFunctionsReqStatsQuery(
+    {
+      projectRef,
+      functionId: id,
+      interval: selectedInterval.key,
+    },
+    { enabled: resourceUsageMetricsEnabled }
+  )
+
+  const { data, error } = useMemo(
+    () => (!resourceUsageMetricsEnabled ? invStatsResult : reqStatsResult),
+    [invStatsResult, reqStatsResult, resourceUsageMetricsEnabled]
+  )
+
+  const { data: resourceUsageData, error: resourceUsageError } = useFunctionsResourceUsageQuery(
+    {
+      projectRef,
+      functionId: id,
+      interval: selectedInterval.key,
+    },
+    { enabled: resourceUsageMetricsEnabled }
+  )
+
   const isChartLoading = !data?.result && !error ? true : false
   const isResourceChartLoading = !resourceUsageData?.result && !error ? true : false
 
@@ -143,16 +165,7 @@ const PageLayout: NextPageWithLayout = () => {
     startDate.toISOString(),
     endDate.toISOString()
   )
-  // const chartData = useFillTimeseriesSorted(
-  //   normalizedData,
-  //   'timestamp',
-  //   ['status', 'count'],
-  //   0,
-  //   startDate.toISOString(),
-  //   endDate.toISOString()
-  // )
   const chartData = normalizedData
-  console.log(chartData)
 
   const resourceChartData = useFillTimeseriesSorted(
     normalizedResourceData,
@@ -228,78 +241,107 @@ const PageLayout: NextPageWithLayout = () => {
               )
             }}
           />
-          <ReportWidget
-            title="Invocations"
-            data={chartData}
-            isLoading={isChartLoading}
-            renderer={(props) => (
-              <StackedBarChart
-                className="w-full"
-                xAxisKey="timestamp"
-                yAxisKey="count"
-                stackKey="status"
-                data={props.data}
-                highlightedValue={sumBy(props.data, 'count')}
-                customDateFormat={selectedInterval.format}
-                stackColors={['brand', 'slate', 'yellow', 'red']}
-                onBarClick={(v) => {
-                  router.push(
-                    `/project/${projectRef}/functions/${functionSlug}/invocations?its=${startDate.toISOString()}&ite=${
-                      v.timestamp
-                    }`
+          {resourceUsageMetricsEnabled ? (
+            <ReportWidget
+              title="Invocations"
+              data={chartData}
+              isLoading={isChartLoading}
+              renderer={(props) => (
+                <StackedBarChart
+                  className="w-full"
+                  xAxisKey="timestamp"
+                  yAxisKey="count"
+                  stackKey="status"
+                  data={props.data}
+                  highlightedValue={sumBy(props.data, 'count')}
+                  customDateFormat={selectedInterval.format}
+                  stackColors={['brand', 'slate', 'yellow', 'red']}
+                  onBarClick={(v) => {
+                    router.push(
+                      `/project/${projectRef}/functions/${functionSlug}/invocations?its=${startDate.toISOString()}&ite=${
+                        v.timestamp
+                      }`
+                    )
+                  }}
+                />
+              )}
+            />
+          ) : (
+            <ReportWidget
+              title="Invocations"
+              data={execChartData}
+              isLoading={isChartLoading}
+              renderer={(props) => (
+                <BarChart
+                  className="w-full"
+                  xAxisKey="timestamp"
+                  yAxisKey="count"
+                  data={props.data}
+                  highlightedValue={sumBy(props.data, 'count')}
+                  customDateFormat={selectedInterval.format}
+                  onBarClick={(v) => {
+                    router.push(
+                      `/project/${projectRef}/functions/${functionSlug}/invocations?its=${startDate.toISOString()}&ite=${
+                        v.timestamp
+                      }`
+                    )
+                  }}
+                />
+              )}
+            />
+          )}
+          {resourceUsageMetricsEnabled && (
+            <>
+              <ReportWidget
+                title="CPU time"
+                tooltip="Average CPU time usage for the function"
+                data={resourceChartData}
+                isLoading={isResourceChartLoading}
+                renderer={(props) => {
+                  const latest = normalizedResourceData[normalizedResourceData.length - 1]
+                  let highlightedValue
+                  if (latest) {
+                    highlightedValue = latest['avg_cpu_time_used']
+                  }
+                  return (
+                    <AreaChart
+                      className="w-full"
+                      xAxisKey="timestamp"
+                      customDateFormat={selectedInterval.format}
+                      yAxisKey="avg_cpu_time_used"
+                      data={props.data}
+                      format="ms"
+                      highlightedValue={highlightedValue}
+                    />
                   )
                 }}
               />
-            )}
-          />
-          <ReportWidget
-            title="CPU time"
-            tooltip="Average CPU time usage for the function"
-            data={resourceChartData}
-            isLoading={isResourceChartLoading}
-            renderer={(props) => {
-              const latest = normalizedResourceData[normalizedResourceData.length - 1]
-              let highlightedValue
-              if (latest) {
-                highlightedValue = latest['avg_cpu_time_used']
-              }
-              return (
-                <AreaChart
-                  className="w-full"
-                  xAxisKey="timestamp"
-                  customDateFormat={selectedInterval.format}
-                  yAxisKey="avg_cpu_time_used"
-                  data={props.data}
-                  format="ms"
-                  highlightedValue={highlightedValue}
-                />
-              )
-            }}
-          />
-          <ReportWidget
-            title="Memory"
-            tooltip="Average memory usage for the function"
-            data={resourceChartData}
-            isLoading={isResourceChartLoading}
-            renderer={(props) => {
-              const latest = normalizedResourceData[normalizedResourceData.length - 1]
-              let highlightedValue
-              if (latest) {
-                highlightedValue = latest['avg_memory_used']
-              }
-              return (
-                <AreaChart
-                  className="w-full"
-                  xAxisKey="timestamp"
-                  customDateFormat={selectedInterval.format}
-                  yAxisKey="avg_memory_used"
-                  data={props.data}
-                  format="MB"
-                  highlightedValue={highlightedValue}
-                />
-              )
-            }}
-          />
+              <ReportWidget
+                title="Memory"
+                tooltip="Average memory usage for the function"
+                data={resourceChartData}
+                isLoading={isResourceChartLoading}
+                renderer={(props) => {
+                  const latest = normalizedResourceData[normalizedResourceData.length - 1]
+                  let highlightedValue
+                  if (latest) {
+                    highlightedValue = latest['avg_memory_used']
+                  }
+                  return (
+                    <AreaChart
+                      className="w-full"
+                      xAxisKey="timestamp"
+                      customDateFormat={selectedInterval.format}
+                      yAxisKey="avg_memory_used"
+                      data={props.data}
+                      format="MB"
+                      highlightedValue={highlightedValue}
+                    />
+                  )
+                }}
+              />
+            </>
+          )}
         </div>
       </div>
     </div>

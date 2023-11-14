@@ -18,7 +18,7 @@ export const analyticsKeys = {
         functionId,
       },
     ] as const,
-  functionsResource: (
+  functionsReqStats: (
     projectRef: string | undefined,
     {
       interval,
@@ -31,7 +31,26 @@ export const analyticsKeys = {
     [
       'projects',
       projectRef,
-      'functions-resources',
+      'functions-req-stats',
+      {
+        interval,
+        functionId,
+      },
+    ] as const,
+  functionsResourceUsage: (
+    projectRef: string | undefined,
+    {
+      interval,
+      functionId,
+    }: {
+      functionId: string | undefined
+      interval: string | undefined
+    }
+  ) =>
+    [
+      'projects',
+      projectRef,
+      'functions-resource-usage',
       {
         interval,
         functionId,
